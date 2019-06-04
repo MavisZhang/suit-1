@@ -5,24 +5,26 @@
 export default class FetchUtils {
   /**
    * Make a fetch call.
-   * It ensures that all requests behave the same including handling SAML errors when a user's session times out.
+   * This method ensures that all requests behave the same including handling
+   * SAML errors when a user's session times out.
    */
   static fetch(
     uri: string,
     payload: any | null,
     callback: (response: any | null, error: string | null) => void,
-    method: string, errorMesssage: string) {
+    method: string, errorMessage: string) {
     const headers = new Headers({
       Accept: 'application/json',
       'Content-Type': 'application/json',
     });
 
-    const body = payload ? JSON.stringify(payload) : null;
+    const body = payload ? JSON.stringify(payload) : undefined;
     const params = {
       method,
       headers,
       body,
       credentials: 'include',
+      mode: 'cors',
     };
     const fetchRequest = new Request(uri, params);
 
@@ -35,48 +37,60 @@ export default class FetchUtils {
               callback(jsonResponse, null);
             }).catch((error: any) => {
               // Catch errors from converting the response's JSON
-              callback(null, FetchUtils.getErrorMessage(error, errorMesssage));
+              callback(null, FetchUtils.getErrorMessage(error, errorMessage));
             });
           } else {
-            // If the response content-type is HTML then reload the page because user's session likely timedout.
-            // SAML tries to redirect but we can't deal with that in Ajax.
-            window.location.reload();
+            response.text().then((text: string) => {
+              if (text.indexOf('SAML') !== -1) {
+                // If the response content-type is HTML and it mentions SAML, it's 99.9% likely
+                // that it's a redirect to a login page. If so, then we then reload the whole
+                // page to let the user log in again.
+                window.location.reload();
+              } else if (text && text.includes('j_security_check')) {
+                window.location.reload();
+              } else {
+                // We've received some other sort of error, so let's just log it and stop.
+                const msg = `REST call to ${uri} failed to return JSON.`;
+                console.error(msg);
+                callback(null, msg);
+              }
+            }).catch((error: any) => {
+              const msg = `Results of REST call to ${uri} couldn't be parsed.`;
+              console.error(msg, error);
+              callback(null, msg);
+            });
           }
         } else {
           // The request came back other than a 200-type response code
           // There should be JSON describing it...
           response.json().then((searchException: any) => {
-            const exceptionMessasge = searchException.message ? searchException.message : '';
+            const exceptionMessage = searchException.message ? searchException.message : '';
             const exceptionCode = searchException.errorCode ? ` (${(searchException.errorCode: string)})` : '';
-            const finalExceptionMessage = `${errorMesssage} ${exceptionMessasge}${exceptionCode}`;
+            const finalExceptionMessage = `${errorMessage} ${exceptionMessage}${exceptionCode}`;
             callback(null, finalExceptionMessage);
           }).catch((badJsonError: any) => {
-            callback(null, FetchUtils.getErrorMessage(badJsonError, errorMesssage));
+            callback(null, FetchUtils.getErrorMessage(badJsonError, errorMessage));
           });
         }
       },
-      () => {
-        // Catch network-type errors from the main fetch() call and reload the page.
-        window.location.reload();
-      },
     ).catch((error: any) => {
       // Catch exceptions from the main "then" function
-      callback(null, FetchUtils.getErrorMessage(error, errorMesssage));
+      callback(null, FetchUtils.getErrorMessage(error, errorMessage));
     });
   }
 
   /**
    * Get the error message out of the error object.
    *
-   * @param error the error recieved
-   * @return      a string represening the error object
+   * @param error the error received
+   * @return      a string representing the error object
    */
-  static getErrorMessage(error: any, errorMesssage: string): string {
+  static getErrorMessage(error: any, errorMessage: string): string {
     let message;
     if (error && error.message) {
       message = error.message;
     } else {
-      message = errorMesssage;
+      message = errorMessage;
     }
     return message;
   }
